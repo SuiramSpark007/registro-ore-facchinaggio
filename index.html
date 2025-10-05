@@ -206,6 +206,7 @@
             setTimeout(() => {
               showToast('Puoi chiudere questa pagina', 'info');
               setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
+              if (canvasRef.current) initCanvas(canvasRef.current);
             }, 2000);
           };
 
@@ -280,13 +281,19 @@
           };
 
           const completeSheet = async () => {
-            if (!currentSheet.firmaResponsabile) {
-              showToast('Firma prima di completare', 'error');
+            // Controlli specifici con messaggi chiari
+            if (!currentSheet.titoloAzienda || !currentSheet.responsabile) {
+              showToast('❌ Compila Azienda e Responsabile', 'error');
               return;
             }
 
-            if (currentSheet.lavoratori.length === 0) {
-              showToast('Nessun lavoratore registrato', 'error');
+            if (!currentSheet.lavoratori || currentSheet.lavoratori.length === 0) {
+              showToast('❌ Nessun lavoratore registrato', 'error');
+              return;
+            }
+
+            if (!currentSheet.firmaResponsabile) {
+              showToast('❌ Firma del responsabile mancante', 'error');
               return;
             }
 
@@ -300,7 +307,7 @@
             
             await generatePDF(completedSheet);
             
-            showToast('Foglio completato! PDF generato', 'success');
+            showToast('✅ Foglio completato! PDF generato', 'success');
             setCurrentSheet(null);
           };
 
@@ -336,7 +343,7 @@
             y += 30;
             ctx.fillText('Responsabile: ' + (sheet.responsabile || 'N/A'), 50, y);
             y += 30;
-            ctx.fillText('Localita: ' + (sheet.location || 'N/A'), 50, y);
+            ctx.fillText('Località: ' + (sheet.location || 'N/A'), 50, y);
             y += 50;
             
             ctx.font = 'bold 14px Arial';
@@ -436,6 +443,9 @@
 
             return (
               <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 p-4">
+                <div className="bg-green-600 text-white py-2 px-4 mb-4 rounded-lg">
+                  <p className="text-center font-semibold">👷‍♂️ MODALITÀ LAVORATORE</p>
+                </div>
                 <div className="max-w-2xl mx-auto">
                   <div className="bg-white rounded-xl shadow-lg p-6">
                     <div className="text-center mb-6">
@@ -513,7 +523,7 @@
 
                       {workerData.oraOut && (
                         <div>
-                          <label className="block text-sm font-medium mb-2">✍️ Firma obbligatoria *</label>
+                          <label className="block text-sm font-medium mb-2">✏️ Firma obbligatoria *</label>
                           <p className="text-xs text-gray-600 mb-2">Disegna la tua firma con il dito</p>
                           <canvas
                             ref={canvasRef}
@@ -557,6 +567,9 @@
           // ADMIN VIEW
           return (
             <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+              <div className="bg-blue-600 text-white py-2 px-4 mb-4 rounded-lg">
+                <p className="text-center font-semibold">👨‍💼 MODALITÀ AMMINISTRATORE</p>
+              </div>
               <div className="max-w-6xl mx-auto">
                 <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
                   <h1 className="text-3xl font-bold mb-6">👨‍💼 Pannello Amministratore</h1>
@@ -574,7 +587,7 @@
                         <div>
                           <h2 className="text-xl font-bold mb-4">📂 Fogli Salvati</h2>
                           <div className="space-y-3">
-                            {savedSheets.reverse().map(sheet => (
+                            {savedSheets.slice().reverse().map(sheet => (
                               <div key={sheet.id} className="border rounded-lg p-4 flex justify-between items-center">
                                 <div>
                                   <p className="font-semibold">{sheet.titoloAzienda || 'Senza titolo'}</p>
@@ -595,7 +608,7 @@
                                       onClick={() => generatePDF(sheet)}
                                       className="px-4 py-2 bg-red-600 text-white rounded"
                                     >
-                                      📥 PDF
+                                      🔥 PDF
                                     </button>
                                   )}
                                 </div>
@@ -666,28 +679,150 @@
 
                       <div>
                         <h3 className="text-lg font-semibold mb-3">Lavoratori Registrati ({currentSheet.lavoratori?.length || 0})</h3>
-                        {currentSheet.lavoratori?.map((worker, i) => (
-                          <div key={worker.id} className="bg-gray-50 p-4 rounded-lg mb-3">
-                            {editingWorker?.id === worker.id ? (
-                              <div className="space-y-3">
-                                <p className="font-semibold">{worker.nome} {worker.cognome}</p>
-                                <div className="grid grid-cols-3 gap-3">
-                                  <div>
-                                    <label className="text-xs">Ora IN</label>
-                                    <input
-                                      type="time"
-                                      value={editingWorker.oraIn}
-                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraIn: e.target.value }))}
-                                      className="w-full p-2 border rounded"
-                                    />
+                        {currentSheet.lavoratori && currentSheet.lavoratori.length > 0 ? (
+                          currentSheet.lavoratori.map((worker, i) => (
+                            <div key={worker.id} className="bg-gray-50 p-4 rounded-lg mb-3">
+                              {editingWorker?.id === worker.id ? (
+                                <div className="space-y-3">
+                                  <p className="font-semibold">{worker.nome} {worker.cognome}</p>
+                                  <div className="grid grid-cols-3 gap-3">
+                                    <div>
+                                      <label className="text-xs">Ora IN</label>
+                                      <input
+                                        type="time"
+                                        value={editingWorker.oraIn}
+                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, oraIn: e.target.value }))}
+                                        className="w-full p-2 border rounded"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-xs">Ora OUT</label>
+                                      <input
+                                        type="time"
+                                        value={editingWorker.oraOut}
+                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, oraOut: e.target.value }))}
+                                        className="w-full p-2 border rounded"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-xs">Pausa (min)</label>
+                                      <input
+                                        type="number"
+                                        value={editingWorker.pausaMinuti}
+                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, pausaMinuti: e.target.value }))}
+                                        className="w-full p-2 border rounded"
+                                      />
+                                    </div>
                                   </div>
-                                  <div>
-                                    <label className="text-xs">Ora OUT</label>
-                                    <input
-                                      type="time"
-                                      value={editingWorker.oraOut}
-                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraOut: e.target.value }))}
-                                      className="w-full p-2 border rounded"
-                                    />
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={updateWorker}
+                                      className="px-4 py-2 bg-green-600 text-white rounded"
+                                    >
+                                      Salva
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingWorker(null)}
+                                      className="px-4 py-2 bg-gray-500 text-white rounded"
+                                    >
+                                      Annulla
+                                    </button>
                                   </div>
-                                
+                                </div>
+                              ) : (
+                                <div className="flex justify-between items-center">
+                                  <div>
+                                    <p className="font-semibold">{worker.nome} {worker.cognome}</p>
+                                    <p className="text-sm text-gray-600">
+                                      {worker.oraIn} - {worker.oraOut} | Pausa: {worker.pausaMinuti || 0}min | 
+                                      <span className="font-bold text-blue-600"> {worker.oreTotali}h</span>
+                                      {worker.modificato && <span className="text-red-600 ml-2">(modificato)</span>}
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={() => setEditingWorker(worker)}
+                                    className="px-3 py-1 bg-blue-500 text-white rounded text-sm"
+                                  >
+                                    Modifica
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-gray-500 text-center py-4">Nessun lavoratore ancora registrato</p>
+                        )}
+                      </div>
+
+                      <div className="border-t pt-6">
+                        <h3 className="text-lg font-semibold mb-3">✏️ Firma Responsabile</h3>
+                        {currentSheet.firmaResponsabile ? (
+                          <div>
+                            <img src={currentSheet.firmaResponsabile} className="border rounded mb-3 w-full max-w-md" alt="Firma" />
+                            <button
+                              onClick={() => setCurrentSheet(prev => ({ ...prev, firmaResponsabile: null }))}
+                              className="px-4 py-2 bg-red-500 text-white rounded"
+                            >
+                              Cancella Firma
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="text-sm text-gray-600 mb-2">Firma con il mouse o con il dito</p>
+                            <canvas
+                              ref={respCanvasRef}
+                              width={600}
+                              height={200}
+                              onMouseDown={startDrawing}
+                              onMouseMove={draw}
+                              onMouseUp={stopDrawing}
+                              onTouchStart={startDrawing}
+                              onTouchMove={draw}
+                              onTouchEnd={stopDrawing}
+                              className="border-2 border-blue-500 rounded w-full bg-white mb-3"
+                              style={{ touchAction: 'none' }}
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={saveResponsabileSignature}
+                                className="px-4 py-2 bg-green-600 text-white rounded"
+                              >
+                                Salva Firma
+                              </button>
+                              <button
+                                onClick={clearSignature}
+                                className="px-4 py-2 bg-gray-500 text-white rounded"
+                              >
+                                Cancella
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-3 pt-4">
+                        <button
+                          onClick={() => setCurrentSheet(null)}
+                          className="flex-1 py-3 bg-gray-500 text-white rounded-lg font-semibold"
+                        >
+                          ← Torna alla lista
+                        </button>
+                        <button
+                          onClick={completeSheet}
+                          className="flex-1 py-3 bg-red-600 text-white rounded-lg font-bold text-lg"
+                        >
+                          ✅ COMPLETA FOGLIO E GENERA PDF
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
