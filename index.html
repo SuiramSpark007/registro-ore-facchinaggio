@@ -34,7 +34,6 @@
     <script type="text/babel">
         const { useState, useRef, useEffect } = React;
         
-        // Toast System
         const showToast = (message, type = 'success') => {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
@@ -49,34 +48,22 @@
         };
 
         const App = () => {
-          const [currentSheet, setCurrentSheet] = useState({
-            id: Date.now(),
-            data: new Date().toISOString().split('T')[0],
-            titoloAzienda: '',
-            location: '',
-            responsabile: '',
-            note: '',
-            lavoratori: [],
-            firmaResponsabile: null,
-            status: 'draft'
-          });
-
+          const [currentSheet, setCurrentSheet] = useState(null);
           const [savedSheets, setSavedSheets] = useState([]);
-          const [isAddingWorker, setIsAddingWorker] = useState(false);
-          const [newWorker, setNewWorker] = useState({ 
-            nome: '', 
-            cognome: '', 
-            oraIn: '', 
+          const [userRole, setUserRole] = useState('admin');
+          const [workerData, setWorkerData] = useState({
+            nome: '',
+            cognome: '',
+            oraIn: '',
             oraOut: '',
             pausaMinuti: '',
-            firma: null 
+            firma: null
           });
-          const [userRole, setUserRole] = useState('admin');
+          const [editingWorker, setEditingWorker] = useState(null);
           
           const canvasRef = useRef(null);
           const respCanvasRef = useRef(null);
           const [isDrawing, setIsDrawing] = useState(false);
-          const [currentSignature, setCurrentSignature] = useState('worker');
 
           const calculateHours = (oraIn, oraOut, pausaMinuti = 0) => {
             if (!oraIn || !oraOut) return '0.00';
@@ -89,23 +76,32 @@
           };
 
           useEffect(() => {
-            const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
-            setSavedSheets(saved);
-            
             const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get('mode') === 'worker') {
+            const mode = urlParams.get('mode');
+            const sheetId = urlParams.get('sheet');
+            
+            if (mode === 'worker' && sheetId) {
               setUserRole('worker');
-              const sheetId = urlParams.get('sheet');
-              if (sheetId) {
-                const existingSheet = saved.find(s => s.id.toString() === sheetId);
-                if (existingSheet) setCurrentSheet(existingSheet);
+              const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
+              let sheet = saved.find(s => s.id.toString() === sheetId);
+              
+              if (sheet) {
+                setCurrentSheet(sheet);
+              } else {
+                showToast('Foglio non trovato', 'error');
               }
+            } else {
+              setUserRole('admin');
+              const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
+              setSavedSheets(saved);
             }
           }, []);
 
           useEffect(() => {
-            localStorage.setItem('timesheets', JSON.stringify(savedSheets));
-          }, [savedSheets]);
+            if (userRole === 'admin') {
+              localStorage.setItem('timesheets', JSON.stringify(savedSheets));
+            }
+          }, [savedSheets, userRole]);
 
           const initCanvas = (canvas) => {
             if (canvas) {
@@ -118,7 +114,7 @@
           useEffect(() => {
             if (canvasRef.current) initCanvas(canvasRef.current);
             if (respCanvasRef.current) initCanvas(respCanvasRef.current);
-          }, [isAddingWorker]);
+          }, []);
 
           const getEventPos = (e, canvas) => {
             const rect = canvas.getBoundingClientRect();
@@ -135,7 +131,7 @@
           const startDrawing = (e) => {
             e.preventDefault();
             setIsDrawing(true);
-            const canvas = currentSignature === 'worker' ? canvasRef.current : respCanvasRef.current;
+            const canvas = userRole === 'worker' ? canvasRef.current : respCanvasRef.current;
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             const pos = getEventPos(e, canvas);
@@ -149,7 +145,7 @@
           const draw = (e) => {
             e.preventDefault();
             if (!isDrawing) return;
-            const canvas = currentSignature === 'worker' ? canvasRef.current : respCanvasRef.current;
+            const canvas = userRole === 'worker' ? canvasRef.current : respCanvasRef.current;
             if (!canvas) return;
             const pos = getEventPos(e, canvas);
             canvas.getContext('2d').lineTo(pos.x, pos.y);
@@ -162,7 +158,7 @@
           };
 
           const clearSignature = () => {
-            const canvas = currentSignature === 'worker' ? canvasRef.current : respCanvasRef.current;
+            const canvas = userRole === 'worker' ? canvasRef.current : respCanvasRef.current;
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -170,65 +166,51 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
           };
 
-          const saveWorkerSignature = () => {
-            if (!canvasRef.current) return;
-            const signatureData = canvasRef.current.toDataURL('image/png');
-            setNewWorker(prev => ({ ...prev, firma: signatureData }));
-            showToast('Firma salvata!', 'success');
-          };
-
-          const saveResponsabileSignature = () => {
-            if (!respCanvasRef.current) return;
-            const signatureData = respCanvasRef.current.toDataURL('image/png');
-            setCurrentSheet(prev => ({ ...prev, firmaResponsabile: signatureData }));
-            showToast('Firma responsabile salvata!', 'success');
-          };
-
-          const addWorker = () => {
-            if (!newWorker.nome || !newWorker.cognome || !newWorker.oraIn || !newWorker.oraOut) {
+          const saveWorkerData = () => {
+            if (!workerData.nome || !workerData.cognome || !workerData.oraIn || !workerData.oraOut) {
               showToast('Compila tutti i campi obbligatori', 'error');
               return;
             }
-            
-            const oreTotali = calculateHours(newWorker.oraIn, newWorker.oraOut, newWorker.pausaMinuti);
-            
-            setCurrentSheet(prev => ({
-              ...prev,
-              lavoratori: [...prev.lavoratori, { ...newWorker, id: Date.now(), oreTotali }]
-            }));
-            
-            setNewWorker({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
-            setIsAddingWorker(false);
-            showToast('Lavoratore aggiunto!', 'success');
-          };
 
-          const removeWorker = (workerId) => {
-            setCurrentSheet(prev => ({
-              ...prev,
-              lavoratori: prev.lavoratori.filter(w => w.id !== workerId)
-            }));
-          };
-
-          const completeSheet = () => {
-            if (!currentSheet.responsabile || !currentSheet.firmaResponsabile || currentSheet.lavoratori.length === 0) {
-              showToast('Compila tutti i campi e aggiungi lavoratori', 'error');
+            if (!canvasRef.current) {
+              showToast('Devi firmare prima di inviare', 'error');
               return;
             }
+
+            const firma = canvasRef.current.toDataURL('image/png');
+            const oreTotali = calculateHours(workerData.oraIn, workerData.oraOut, workerData.pausaMinuti);
             
-            const completedSheet = { 
-              ...currentSheet, 
-              status: 'completed', 
-              completedAt: new Date().toISOString() 
+            const worker = {
+              ...workerData,
+              firma,
+              oreTotali,
+              id: Date.now(),
+              submittedAt: new Date().toISOString()
             };
-            
-            setSavedSheets(prev => {
-              const filtered = prev.filter(s => s.id !== currentSheet.id);
-              return [...filtered, completedSheet];
+
+            const allSheets = JSON.parse(localStorage.getItem('timesheets') || '[]');
+            const updatedSheets = allSheets.map(s => {
+              if (s.id === currentSheet.id) {
+                return {
+                  ...s,
+                  lavoratori: [...(s.lavoratori || []), worker]
+                };
+              }
+              return s;
             });
             
-            showToast('Foglio completato!', 'success');
+            localStorage.setItem('timesheets', JSON.stringify(updatedSheets));
             
-            setCurrentSheet({
+            showToast('Dati inviati con successo!', 'success');
+            
+            setTimeout(() => {
+              showToast('Puoi chiudere questa pagina', 'info');
+              setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
+            }, 2000);
+          };
+
+          const createNewSheet = () => {
+            const newSheet = {
               id: Date.now(),
               data: new Date().toISOString().split('T')[0],
               titoloAzienda: '',
@@ -238,7 +220,95 @@
               lavoratori: [],
               firmaResponsabile: null,
               status: 'draft'
+            };
+            setCurrentSheet(newSheet);
+          };
+
+          const saveSheet = () => {
+            if (!currentSheet.titoloAzienda || !currentSheet.responsabile) {
+              showToast('Inserisci almeno azienda e responsabile', 'error');
+              return;
+            }
+
+            setSavedSheets(prev => {
+              const filtered = prev.filter(s => s.id !== currentSheet.id);
+              return [...filtered, currentSheet];
             });
+            
+            showToast('Foglio salvato!', 'success');
+          };
+
+          const generateShareLink = () => {
+            if (!currentSheet || !currentSheet.titoloAzienda) {
+              showToast('Salva prima il foglio', 'error');
+              return;
+            }
+
+            saveSheet();
+            
+            const link = window.location.origin + window.location.pathname + '?mode=worker&sheet=' + currentSheet.id;
+            
+            navigator.clipboard.writeText(link).then(() => {
+              showToast('Link copiato! Invialo su WhatsApp', 'success');
+            }).catch(() => {
+              alert('Link:\n' + link);
+            });
+          };
+
+          const loadSheet = (sheet) => {
+            setCurrentSheet(sheet);
+          };
+
+          const updateWorker = () => {
+            if (!editingWorker) return;
+
+            const oreTotali = calculateHours(editingWorker.oraIn, editingWorker.oraOut, editingWorker.pausaMinuti);
+            
+            const updatedWorker = { ...editingWorker, oreTotali, modificato: true };
+            
+            const updatedSheet = {
+              ...currentSheet,
+              lavoratori: currentSheet.lavoratori.map(w => 
+                w.id === editingWorker.id ? updatedWorker : w
+              )
+            };
+
+            setCurrentSheet(updatedSheet);
+            setSavedSheets(prev => prev.map(s => s.id === updatedSheet.id ? updatedSheet : s));
+            setEditingWorker(null);
+            showToast('Orari aggiornati', 'success');
+          };
+
+          const completeSheet = async () => {
+            if (!currentSheet.firmaResponsabile) {
+              showToast('Firma prima di completare', 'error');
+              return;
+            }
+
+            if (currentSheet.lavoratori.length === 0) {
+              showToast('Nessun lavoratore registrato', 'error');
+              return;
+            }
+
+            const completedSheet = {
+              ...currentSheet,
+              status: 'completed',
+              completedAt: new Date().toISOString()
+            };
+
+            setSavedSheets(prev => prev.map(s => s.id === completedSheet.id ? completedSheet : s));
+            
+            await generatePDF(completedSheet);
+            
+            showToast('Foglio completato! PDF generato', 'success');
+            setCurrentSheet(null);
+          };
+
+          const saveResponsabileSignature = () => {
+            if (!respCanvasRef.current) return;
+            const firma = respCanvasRef.current.toDataURL('image/png');
+            setCurrentSheet(prev => ({ ...prev, firmaResponsabile: firma }));
+            showToast('Firma salvata!', 'success');
           };
 
           const generatePDF = async (sheet) => {
@@ -255,7 +325,6 @@
             
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 32px Arial';
-            ctx.textAlign = 'left';
             ctx.fillText('REGISTRO ORE LAVORO', 50, 50);
             ctx.font = 'bold 24px Arial';
             ctx.fillText(sheet.titoloAzienda || 'AZIENDA', 50, 90);
@@ -268,14 +337,8 @@
             ctx.fillText('Responsabile: ' + (sheet.responsabile || 'N/A'), 50, y);
             y += 30;
             ctx.fillText('Localita: ' + (sheet.location || 'N/A'), 50, y);
-            y += 30;
-            if (sheet.note) {
-              ctx.font = '14px Arial';
-              ctx.fillText('Note: ' + sheet.note, 50, y);
-              y += 30;
-            }
+            y += 50;
             
-            y += 20;
             ctx.font = 'bold 14px Arial';
             ctx.fillStyle = '#1e40af';
             ctx.fillRect(50, y, 900, 40);
@@ -314,6 +377,13 @@
               ctx.fillText(worker.oreTotali + 'h', 650, rowY + 30);
               totalOre += parseFloat(worker.oreTotali);
               
+              if (worker.modificato) {
+                ctx.font = '11px Arial';
+                ctx.fillStyle = '#dc2626';
+                ctx.fillText('(modificato)', 650, rowY + 50);
+                ctx.fillStyle = '#000000';
+              }
+              
               if (worker.firma) {
                 const img = new Image();
                 img.src = worker.firma;
@@ -348,237 +418,276 @@
               a.download = 'Registro_' + (sheet.titoloAzienda || 'Ore') + '_' + sheet.data + '.png';
               a.click();
               URL.revokeObjectURL(url);
-              showToast('Documento scaricato!', 'success');
             });
           };
 
+          // WORKER VIEW
+          if (userRole === 'worker') {
+            if (!currentSheet) {
+              return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 flex items-center justify-center">
+                  <div className="bg-white rounded-xl shadow-lg p-8 text-center">
+                    <h1 className="text-2xl font-bold text-red-600 mb-4">❌ Foglio non trovato</h1>
+                    <p className="text-gray-600">Il link potrebbe essere scaduto o non valido</p>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 p-4">
+                <div className="max-w-2xl mx-auto">
+                  <div className="bg-white rounded-xl shadow-lg p-6">
+                    <div className="text-center mb-6">
+                      <h1 className="text-2xl font-bold text-green-800">👷‍♂️ Registra le tue ore</h1>
+                      <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                        <p className="font-semibold text-lg">{currentSheet.titoloAzienda}</p>
+                        <p className="text-sm text-gray-600">Responsabile: {currentSheet.responsabile}</p>
+                        <p className="text-sm text-gray-600">Data: {currentSheet.data}</p>
+                        {currentSheet.location && <p className="text-sm text-gray-600">📍 {currentSheet.location}</p>}
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Nome *</label>
+                        <input
+                          type="text"
+                          value={workerData.nome}
+                          onChange={(e) => setWorkerData(prev => ({ ...prev, nome: e.target.value }))}
+                          placeholder="Il tuo nome"
+                          className="w-full p-3 border-2 rounded-lg text-lg"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Cognome *</label>
+                        <input
+                          type="text"
+                          value={workerData.cognome}
+                          onChange={(e) => setWorkerData(prev => ({ ...prev, cognome: e.target.value }))}
+                          placeholder="Il tuo cognome"
+                          className="w-full p-3 border-2 rounded-lg text-lg"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium mb-2">🟢 Ora Inizio *</label>
+                          <input
+                            type="time"
+                            value={workerData.oraIn}
+                            onChange={(e) => setWorkerData(prev => ({ ...prev, oraIn: e.target.value }))}
+                            className="w-full p-3 border-2 rounded-lg text-lg"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-2">🔴 Ora Fine *</label>
+                          <input
+                            type="time"
+                            value={workerData.oraOut}
+                            onChange={(e) => setWorkerData(prev => ({ ...prev, oraOut: e.target.value }))}
+                            className="w-full p-3 border-2 rounded-lg text-lg"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">⏸️ Pausa (minuti)</label>
+                        <input
+                          type="number"
+                          value={workerData.pausaMinuti}
+                          onChange={(e) => setWorkerData(prev => ({ ...prev, pausaMinuti: e.target.value }))}
+                          placeholder="Es: 30"
+                          className="w-full p-3 border-2 rounded-lg text-lg"
+                        />
+                      </div>
+
+                      {workerData.oraIn && workerData.oraOut && (
+                        <div className="p-4 bg-green-100 rounded-lg">
+                          <p className="font-bold text-green-800 text-xl">
+                            ⏱️ Ore totali: {calculateHours(workerData.oraIn, workerData.oraOut, workerData.pausaMinuti)}h
+                          </p>
+                        </div>
+                      )}
+
+                      {workerData.oraOut && (
+                        <div>
+                          <label className="block text-sm font-medium mb-2">✍️ Firma obbligatoria *</label>
+                          <p className="text-xs text-gray-600 mb-2">Disegna la tua firma con il dito</p>
+                          <canvas
+                            ref={canvasRef}
+                            width={400}
+                            height={200}
+                            onMouseDown={startDrawing}
+                            onMouseMove={draw}
+                            onMouseUp={stopDrawing}
+                            onTouchStart={startDrawing}
+                            onTouchMove={draw}
+                            onTouchEnd={stopDrawing}
+                            className="border-2 border-blue-500 rounded w-full bg-white"
+                            style={{ touchAction: 'none' }}
+                          />
+                          <button 
+                            onClick={clearSignature} 
+                            className="mt-2 px-4 py-2 bg-gray-500 text-white rounded text-sm"
+                          >
+                            Cancella Firma
+                          </button>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={saveWorkerData}
+                        className="w-full py-4 bg-green-600 text-white rounded-lg font-bold text-lg hover:bg-green-700"
+                      >
+                        ✅ INVIA DATI AL RESPONSABILE
+                      </button>
+
+                      <p className="text-xs text-center text-gray-500">
+                        I tuoi dati verranno inviati al responsabile per la conferma finale
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ADMIN VIEW
           return (
             <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
               <div className="max-w-6xl mx-auto">
                 <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-                  <h1 className="text-3xl font-bold mb-6">⏰ Registro Presenze</h1>
-                  
-                  <div className="space-y-6">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Titolo / Azienda</label>
-                        <input
-                          type="text"
-                          value={currentSheet.titoloAzienda}
-                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, titoloAzienda: e.target.value }))}
-                          placeholder="Es: Amazon, DHL"
-                          className="w-full p-3 border rounded-lg"
-                          disabled={userRole === 'worker'}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Data</label>
-                        <input
-                          type="date"
-                          value={currentSheet.data}
-                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, data: e.target.value }))}
-                          className="w-full p-3 border rounded-lg"
-                        />
-                      </div>
-                    </div>
+                  <h1 className="text-3xl font-bold mb-6">👨‍💼 Pannello Amministratore</h1>
 
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Responsabile</label>
-                        <input
-                          type="text"
-                          value={currentSheet.responsabile}
-                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, responsabile: e.target.value }))}
-                          placeholder="Nome responsabile"
-                          className="w-full p-3 border rounded-lg"
-                          disabled={userRole === 'worker'}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Località</label>
-                        <input
-                          type="text"
-                          value={currentSheet.location}
-                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, location: e.target.value }))}
-                          placeholder="Indirizzo"
-                          className="w-full p-3 border rounded-lg"
-                        />
-                      </div>
-                    </div>
-
+                  {!currentSheet ? (
                     <div>
-                      <label className="block text-sm font-medium mb-2">Note (opzionale)</label>
-                      <textarea
-                        value={currentSheet.note}
-                        onChange={(e) => setCurrentSheet(prev => ({ ...prev, note: e.target.value }))}
-                        placeholder="Es: Materiale scaricato, problemi..."
-                        className="w-full p-3 border rounded-lg"
-                        rows="3"
-                      />
-                    </div>
+                      <button
+                        onClick={createNewSheet}
+                        className="w-full py-4 bg-blue-600 text-white rounded-lg font-bold text-lg hover:bg-blue-700 mb-6"
+                      >
+                        + CREA NUOVO FOGLIO
+                      </button>
 
-                    <div>
-                      <div className="flex justify-between mb-4">
-                        <h3 className="text-lg font-semibold">Lavoratori ({currentSheet.lavoratori.length})</h3>
-                        <button
-                          onClick={() => setIsAddingWorker(true)}
-                          className="px-4 py-2 bg-blue-600 text-white rounded-lg"
-                        >
-                          + Aggiungi
-                        </button>
-                      </div>
-
-                      {currentSheet.lavoratori.map((worker, i) => (
-                        <div key={worker.id} className="bg-gray-50 p-4 rounded-lg mb-3 flex justify-between">
-                          <div>
-                            <p className="font-medium">{i + 1}. {worker.nome} {worker.cognome}</p>
-                            <p className="text-sm text-gray-600">IN: {worker.oraIn} | OUT: {worker.oraOut} | Ore: {worker.oreTotali}h</p>
-                          </div>
-                          <button onClick={() => removeWorker(worker.id)} className="text-red-600">🗑️</button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {isAddingWorker && (
-                      <div className="bg-blue-50 p-6 rounded-lg">
-                        <h4 className="font-semibold mb-4">Nuovo Lavoratore</h4>
-                        <div className="grid md:grid-cols-2 gap-4 mb-4">
-                          <input
-                            type="text"
-                            value={newWorker.nome}
-                            onChange={(e) => setNewWorker(prev => ({ ...prev, nome: e.target.value }))}
-                            placeholder="Nome"
-                            className="p-3 border rounded-lg"
-                          />
-                          <input
-                            type="text"
-                            value={newWorker.cognome}
-                            onChange={(e) => setNewWorker(prev => ({ ...prev, cognome: e.target.value }))}
-                            placeholder="Cognome"
-                            className="p-3 border rounded-lg"
-                          />
-                        </div>
-                        <div className="grid grid-cols-3 gap-4 mb-4">
-                          <div>
-                            <label className="block text-sm mb-2">Ora IN</label>
-                            <input
-                              type="time"
-                              value={newWorker.oraIn}
-                              onChange={(e) => setNewWorker(prev => ({ ...prev, oraIn: e.target.value }))}
-                              className="w-full p-3 border rounded-lg"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm mb-2">Ora OUT</label>
-                            <input
-                              type="time"
-                              value={newWorker.oraOut}
-                              onChange={(e) => setNewWorker(prev => ({ ...prev, oraOut: e.target.value }))}
-                              className="w-full p-3 border rounded-lg"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm mb-2">Pausa (min)</label>
-                            <input
-                              type="number"
-                              value={newWorker.pausaMinuti}
-                              onChange={(e) => setNewWorker(prev => ({ ...prev, pausaMinuti: e.target.value }))}
-                              className="w-full p-3 border rounded-lg"
-                            />
-                          </div>
-                        </div>
-
-                        {newWorker.oraIn && newWorker.oraOut && (
-                          <div className="mb-4 p-3 bg-blue-100 rounded">
-                            <strong>Ore totali: {calculateHours(newWorker.oraIn, newWorker.oraOut, newWorker.pausaMinuti)}h</strong>
-                          </div>
-                        )}
-
-                        <div className="mb-4">
-                          <label className="block text-sm mb-2">Firma (opzionale)</label>
-                          <canvas
-                            ref={canvasRef}
-                            width={400}
-                            height={150}
-                            onMouseDown={(e) => { setCurrentSignature('worker'); startDrawing(e); }}
-                            onMouseMove={draw}
-                            onMouseUp={stopDrawing}
-                            onTouchStart={(e) => { setCurrentSignature('worker'); startDrawing(e); }}
-                            onTouchMove={draw}
-                            onTouchEnd={stopDrawing}
-                            className="border rounded w-full bg-white"
-                            style={{ touchAction: 'none' }}
-                          />
-                          <div className="flex gap-2 mt-2">
-                            <button onClick={clearSignature} className="px-3 py-2 bg-gray-500 text-white rounded">Cancella</button>
-                            <button onClick={saveWorkerSignature} className="px-3 py-2 bg-green-600 text-white rounded">Salva Firma</button>
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button onClick={addWorker} className="px-4 py-2 bg-green-600 text-white rounded-lg">Conferma</button>
-                          <button onClick={() => setIsAddingWorker(false)} className="px-4 py-2 bg-gray-500 text-white rounded-lg">Annulla</button>
-                        </div>
-                      </div>
-                    )}
-
-                    {userRole === 'admin' && (
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Firma Responsabile</label>
-                        <canvas
-                          ref={respCanvasRef}
-                          width={400}
-                          height={150}
-                          onMouseDown={(e) => { setCurrentSignature('responsabile'); startDrawing(e); }}
-                          onMouseMove={draw}
-                          onMouseUp={stopDrawing}
-                          onTouchStart={(e) => { setCurrentSignature('responsabile'); startDrawing(e); }}
-                          onTouchMove={draw}
-                          onTouchEnd={stopDrawing}
-                          className="border rounded w-full bg-white"
-                          style={{ touchAction: 'none' }}
-                        />
-                        <div className="flex gap-2 mt-2">
-                          <button onClick={clearSignature} className="px-3 py-2 bg-gray-500 text-white rounded">Cancella</button>
-                          <button onClick={saveResponsabileSignature} className="px-3 py-2 bg-green-600 text-white rounded">Salva Firma</button>
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={completeSheet}
-                      className="w-full py-3 bg-green-600 text-white rounded-lg font-semibold"
-                    >
-                      ✅ Completa Foglio
-                    </button>
-                  </div>
-                </div>
-
-                {savedSheets.filter(s => s.status === 'completed').length > 0 && (
-                  <div className="bg-white rounded-xl shadow-lg p-6">
-                    <h2 className="text-2xl font-bold mb-4">📂 Registri Completati</h2>
-                    {savedSheets.filter(s => s.status === 'completed').reverse().map(sheet => (
-                      <div key={sheet.id} className="border rounded-lg p-4 mb-3 flex justify-between items-center">
+                      {savedSheets.length > 0 && (
                         <div>
-                          <h3 className="font-semibold">{sheet.titoloAzienda || 'Senza titolo'}</h3>
-                          <p className="text-sm text-gray-600">{sheet.data} - {sheet.lavoratori.length} lavoratori</p>
+                          <h2 className="text-xl font-bold mb-4">📂 Fogli Salvati</h2>
+                          <div className="space-y-3">
+                            {savedSheets.reverse().map(sheet => (
+                              <div key={sheet.id} className="border rounded-lg p-4 flex justify-between items-center">
+                                <div>
+                                  <p className="font-semibold">{sheet.titoloAzienda || 'Senza titolo'}</p>
+                                  <p className="text-sm text-gray-600">
+                                    {sheet.data} | {sheet.lavoratori?.length || 0} lavoratori
+                                    {sheet.status === 'completed' && ' | ✅ Completato'}
+                                  </p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => loadSheet(sheet)}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded"
+                                  >
+                                    Apri
+                                  </button>
+                                  {sheet.status === 'completed' && (
+                                    <button
+                                      onClick={() => generatePDF(sheet)}
+                                      className="px-4 py-2 bg-red-600 text-white rounded"
+                                    >
+                                      📥 PDF
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium mb-2">Azienda Cliente *</label>
+                          <input
+                            type="text"
+                            value={currentSheet.titoloAzienda}
+                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, titoloAzienda: e.target.value }))}
+                            placeholder="Es: Amazon, DHL"
+                            className="w-full p-3 border rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-2">Data</label>
+                          <input
+                            type="date"
+                            value={currentSheet.data}
+                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, data: e.target.value }))}
+                            className="w-full p-3 border rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-2">Responsabile *</label>
+                          <input
+                            type="text"
+                            value={currentSheet.responsabile}
+                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, responsabile: e.target.value }))}
+                            placeholder="Tuo nome"
+                            className="w-full p-3 border rounded-lg"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-2">Località</label>
+                          <input
+                            type="text"
+                            value={currentSheet.location}
+                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, location: e.target.value }))}
+                            placeholder="Indirizzo"
+                            className="w-full p-3 border rounded-lg"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3">
                         <button
-                          onClick={() => generatePDF(sheet)}
-                          className="px-4 py-2 bg-red-600 text-white rounded-lg"
+                          onClick={saveSheet}
+                          className="flex-1 py-3 bg-green-600 text-white rounded-lg font-semibold"
                         >
-                          📥 Scarica
+                          💾 Salva
+                        </button>
+                        <button
+                          onClick={generateShareLink}
+                          className="flex-1 py-3 bg-purple-600 text-white rounded-lg font-semibold"
+                        >
+                          📤 Genera Link WhatsApp
                         </button>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        };
 
-        ReactDOM.render(<App />, document.getElementById('root'));
-    </script>
-</body>
-</html>
+                      <div>
+                        <h3 className="text-lg font-semibold mb-3">Lavoratori Registrati ({currentSheet.lavoratori?.length || 0})</h3>
+                        {currentSheet.lavoratori?.map((worker, i) => (
+                          <div key={worker.id} className="bg-gray-50 p-4 rounded-lg mb-3">
+                            {editingWorker?.id === worker.id ? (
+                              <div className="space-y-3">
+                                <p className="font-semibold">{worker.nome} {worker.cognome}</p>
+                                <div className="grid grid-cols-3 gap-3">
+                                  <div>
+                                    <label className="text-xs">Ora IN</label>
+                                    <input
+                                      type="time"
+                                      value={editingWorker.oraIn}
+                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraIn: e.target.value }))}
+                                      className="w-full p-2 border rounded"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-xs">Ora OUT</label>
+                                    <input
+                                      type="time"
+                                      value={editingWorker.oraOut}
+                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraOut: e.target.value }))}
+                                      className="w-full p-2 border rounded"
+                                    />
+                                  </div>
+                                
