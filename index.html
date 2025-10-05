@@ -8,6 +8,11 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
     <style>
         .toast {
             position: fixed;
@@ -33,6 +38,29 @@
     
     <script type="text/babel">
         const { useState, useRef, useEffect } = React;
+        
+        // ⚙️ CONFIGURAZIONE FIREBASE - SOSTITUISCI CON LE TUE CREDENZIALI
+        const firebaseConfig = {
+            apiKey: "AIzaSyCg3TOQ1vfqcZ1UTXK3NCMbsjf4_z9zvFc",
+  authDomain: "registroore-963c6.firebaseapp.com",
+  projectId: "registroore-963c6",
+  storageBucket: "registroore-963c6.firebasestorage.app",
+  messagingSenderId: "413364101167",
+  appId: "1:413364101167:web:a83f8023868a717a5fe6da",
+  measurementId: "G-J9SX458Z83"
+        };
+        
+        // Inizializza Firebase
+        let db = null;
+        try {
+          if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+          }
+          db = firebase.firestore();
+          console.log('✅ Firebase connesso!');
+        } catch (error) {
+          console.error('❌ Errore Firebase:', error);
+        }
         
         const showToast = (message, type = 'success') => {
             const container = document.getElementById('toast-container');
@@ -76,34 +104,70 @@
             return Math.max(0, diffMinutes / 60).toFixed(2);
           };
 
+          // 🔥 Carica fogli da Firebase
           useEffect(() => {
-            const savedDarkMode = localStorage.getItem('darkMode') === 'true';
-            setDarkMode(savedDarkMode);
-            
+            const loadFromFirebase = async () => {
+              if (!db) {
+                // Fallback a localStorage se Firebase non configurato
+                const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
+                setSavedSheets(saved);
+                return;
+              }
+
+              try {
+                const snapshot = await db.collection('timesheets').get();
+                const sheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setSavedSheets(sheets);
+              } catch (error) {
+                console.error('Errore caricamento:', error);
+                showToast('⚠️ Errore connessione Firebase', 'error');
+              }
+            };
+
             const urlParams = new URLSearchParams(window.location.search);
             const mode = urlParams.get('mode');
-            const sheetData = urlParams.get('data');
+            const sheetId = urlParams.get('sheet');
             
-            if (mode === 'worker' && sheetData) {
+            const savedDarkMode = localStorage.getItem('darkMode') === 'true';
+            setDarkMode(savedDarkMode);
+
+            if (mode === 'worker' && sheetId) {
               setUserRole('worker');
-              try {
-                const sheet = JSON.parse(atob(sheetData));
-                setCurrentSheet(sheet);
-              } catch (e) {
-                showToast('Link non valido', 'error');
+              // Carica foglio specifico da Firebase
+              if (db) {
+                db.collection('timesheets').doc(sheetId).get()
+                  .then(doc => {
+                    if (doc.exists) {
+                      setCurrentSheet({ id: doc.id, ...doc.data() });
+                    } else {
+                      showToast('Foglio non trovato', 'error');
+                    }
+                  })
+                  .catch(err => {
+                    console.error(err);
+                    showToast('Errore caricamento foglio', 'error');
+                  });
               }
             } else {
               setUserRole('admin');
-              const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
-              setSavedSheets(saved);
+              loadFromFirebase();
             }
           }, []);
 
+          // 🔥 Listener in tempo reale per aggiornamenti
           useEffect(() => {
-            if (userRole === 'admin') {
-              localStorage.setItem('timesheets', JSON.stringify(savedSheets));
+            if (userRole === 'admin' && db) {
+              const unsubscribe = db.collection('timesheets')
+                .onSnapshot(snapshot => {
+                  const sheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                  setSavedSheets(sheets);
+                }, error => {
+                  console.error('Errore listener:', error);
+                });
+
+              return () => unsubscribe();
             }
-          }, [savedSheets, userRole]);
+          }, [userRole]);
 
           useEffect(() => {
             localStorage.setItem('darkMode', darkMode);
@@ -172,7 +236,8 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
           };
 
-          const saveWorkerData = () => {
+          // 🔥 Worker salva su Firebase
+          const saveWorkerData = async () => {
             if (!workerData.nome || !workerData.cognome || !workerData.oraIn || !workerData.oraOut) {
               showToast('Compila tutti i campi obbligatori', 'error');
               return;
@@ -194,33 +259,33 @@
               submittedAt: new Date().toISOString()
             };
 
-            const updatedSheet = {
-              ...currentSheet,
-              lavoratori: [...(currentSheet.lavoratori || []), worker]
-            };
-
-            // Salva nell'admin
-            const allSheets = JSON.parse(localStorage.getItem('timesheets') || '[]');
-            const updatedSheets = allSheets.map(s => 
-              s.id === currentSheet.id ? updatedSheet : s
-            );
-            if (!allSheets.find(s => s.id === currentSheet.id)) {
-              updatedSheets.push(updatedSheet);
+            if (!db) {
+              showToast('❌ Firebase non configurato', 'error');
+              return;
             }
-            localStorage.setItem('timesheets', JSON.stringify(updatedSheets));
-            
-            showToast('✅ Dati inviati con successo!', 'success');
-            
-            setTimeout(() => {
-              showToast('Puoi chiudere questa pagina', 'info');
-              setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
-              if (canvasRef.current) initCanvas(canvasRef.current);
-            }, 2000);
+
+            try {
+              // Aggiungi worker al foglio su Firebase
+              await db.collection('timesheets').doc(currentSheet.id).update({
+                lavoratori: firebase.firestore.FieldValue.arrayUnion(worker)
+              });
+
+              showToast('✅ Dati inviati con successo!', 'success');
+              
+              setTimeout(() => {
+                showToast('Puoi chiudere questa pagina', 'info');
+                setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
+                if (canvasRef.current) initCanvas(canvasRef.current);
+              }, 2000);
+            } catch (error) {
+              console.error(error);
+              showToast('Errore invio dati', 'error');
+            }
           };
 
-          const createNewSheet = () => {
+          // 🔥 Crea nuovo foglio su Firebase
+          const createNewSheet = async () => {
             const newSheet = {
-              id: Date.now(),
               data: new Date().toISOString().split('T')[0],
               titoloAzienda: '',
               location: '',
@@ -229,23 +294,44 @@
               lavoratori: [],
               firmaResponsabile: null,
               status: 'draft',
-              archived: false
+              archived: false,
+              createdAt: new Date().toISOString()
             };
-            setCurrentSheet(newSheet);
+
+            if (db) {
+              try {
+                const docRef = await db.collection('timesheets').add(newSheet);
+                setCurrentSheet({ id: docRef.id, ...newSheet });
+                showToast('Nuovo foglio creato', 'success');
+              } catch (error) {
+                console.error(error);
+                showToast('Errore creazione foglio', 'error');
+              }
+            } else {
+              // Fallback localStorage
+              const id = Date.now().toString();
+              setCurrentSheet({ id, ...newSheet });
+            }
           };
 
-          const saveSheet = () => {
+          // 🔥 Salva foglio su Firebase
+          const saveSheet = async () => {
             if (!currentSheet.titoloAzienda || !currentSheet.responsabile) {
               showToast('Inserisci almeno azienda e responsabile', 'error');
               return;
             }
 
-            setSavedSheets(prev => {
-              const filtered = prev.filter(s => s.id !== currentSheet.id);
-              return [...filtered, currentSheet];
-            });
-            
-            showToast('Foglio salvato!', 'success');
+            if (db) {
+              try {
+                await db.collection('timesheets').doc(currentSheet.id).set(currentSheet, { merge: true });
+                showToast('Foglio salvato!', 'success');
+              } catch (error) {
+                console.error(error);
+                showToast('Errore salvataggio', 'error');
+              }
+            } else {
+              showToast('⚠️ Firebase non configurato', 'error');
+            }
           };
 
           const generateShareLink = () => {
@@ -256,8 +342,7 @@
 
             saveSheet();
             
-            const sheetData = btoa(JSON.stringify(currentSheet));
-            const link = window.location.origin + window.location.pathname + '?mode=worker&data=' + sheetData;
+            const link = window.location.origin + window.location.pathname + '?mode=worker&sheet=' + currentSheet.id;
             
             navigator.clipboard.writeText(link).then(() => {
               showToast('✅ Link copiato! Invialo su WhatsApp', 'success');
@@ -270,49 +355,80 @@
             setCurrentSheet(sheet);
           };
 
-          const deleteSheet = (sheetId) => {
+          // 🔥 Elimina da Firebase
+          const deleteSheet = async (sheetId) => {
             if (confirm('Sei sicuro di voler eliminare questo foglio?')) {
-              setSavedSheets(prev => prev.filter(s => s.id !== sheetId));
-              showToast('Foglio eliminato', 'success');
+              if (db) {
+                try {
+                  await db.collection('timesheets').doc(sheetId).delete();
+                  showToast('Foglio eliminato', 'success');
+                } catch (error) {
+                  console.error(error);
+                  showToast('Errore eliminazione', 'error');
+                }
+              }
             }
           };
 
-          const archiveSheet = (sheetId) => {
-            setSavedSheets(prev => prev.map(s => 
-              s.id === sheetId ? { ...s, archived: !s.archived } : s
-            ));
-            showToast('Foglio archiviato', 'success');
+          // 🔥 Archivia su Firebase
+          const archiveSheet = async (sheetId) => {
+            if (db) {
+              try {
+                const doc = await db.collection('timesheets').doc(sheetId).get();
+                const isArchived = doc.data().archived;
+                await db.collection('timesheets').doc(sheetId).update({
+                  archived: !isArchived
+                });
+                showToast(isArchived ? 'Foglio ripristinato' : 'Foglio archiviato', 'success');
+              } catch (error) {
+                console.error(error);
+                showToast('Errore archiviazione', 'error');
+              }
+            }
           };
 
-          const updateWorker = () => {
+          const updateWorker = async () => {
             if (!editingWorker) return;
 
             const oreTotali = calculateHours(editingWorker.oraIn, editingWorker.oraOut, editingWorker.pausaMinuti);
             
             const updatedWorker = { ...editingWorker, oreTotali, modificato: true };
             
-            const updatedSheet = {
-              ...currentSheet,
-              lavoratori: currentSheet.lavoratori.map(w => 
-                w.id === editingWorker.id ? updatedWorker : w
-              )
-            };
+            const updatedLavoratori = currentSheet.lavoratori.map(w => 
+              w.id === editingWorker.id ? updatedWorker : w
+            );
 
-            setCurrentSheet(updatedSheet);
-            setSavedSheets(prev => prev.map(s => s.id === updatedSheet.id ? updatedSheet : s));
-            setEditingWorker(null);
-            showToast('Orari aggiornati', 'success');
+            if (db) {
+              try {
+                await db.collection('timesheets').doc(currentSheet.id).update({
+                  lavoratori: updatedLavoratori
+                });
+                setCurrentSheet(prev => ({ ...prev, lavoratori: updatedLavoratori }));
+                setEditingWorker(null);
+                showToast('Orari aggiornati', 'success');
+              } catch (error) {
+                console.error(error);
+                showToast('Errore aggiornamento', 'error');
+              }
+            }
           };
 
-          const deleteWorker = (workerId) => {
+          const deleteWorker = async (workerId) => {
             if (confirm('Eliminare questo lavoratore?')) {
-              const updatedSheet = {
-                ...currentSheet,
-                lavoratori: currentSheet.lavoratori.filter(w => w.id !== workerId)
-              };
-              setCurrentSheet(updatedSheet);
-              setSavedSheets(prev => prev.map(s => s.id === updatedSheet.id ? updatedSheet : s));
-              showToast('Lavoratore eliminato', 'success');
+              const updatedLavoratori = currentSheet.lavoratori.filter(w => w.id !== workerId);
+              
+              if (db) {
+                try {
+                  await db.collection('timesheets').doc(currentSheet.id).update({
+                    lavoratori: updatedLavoratori
+                  });
+                  setCurrentSheet(prev => ({ ...prev, lavoratori: updatedLavoratori }));
+                  showToast('Lavoratore eliminato', 'success');
+                } catch (error) {
+                  console.error(error);
+                  showToast('Errore eliminazione', 'error');
+                }
+              }
             }
           };
 
@@ -338,19 +454,35 @@
               completedAt: new Date().toISOString()
             };
 
-            setSavedSheets(prev => prev.map(s => s.id === completedSheet.id ? completedSheet : s));
-            
-            await generatePDF(completedSheet);
-            
-            showToast('✅ Foglio completato! PDF generato', 'success');
-            setCurrentSheet(null);
+            if (db) {
+              try {
+                await db.collection('timesheets').doc(currentSheet.id).set(completedSheet, { merge: true });
+                await generatePDF(completedSheet);
+                showToast('✅ Foglio completato! PDF generato', 'success');
+                setCurrentSheet(null);
+              } catch (error) {
+                console.error(error);
+                showToast('Errore completamento', 'error');
+              }
+            }
           };
 
-          const saveResponsabileSignature = () => {
+          const saveResponsabileSignature = async () => {
             if (!respCanvasRef.current) return;
             const firma = respCanvasRef.current.toDataURL('image/png');
-            setCurrentSheet(prev => ({ ...prev, firmaResponsabile: firma }));
-            showToast('Firma salvata!', 'success');
+            
+            if (db) {
+              try {
+                await db.collection('timesheets').doc(currentSheet.id).update({
+                  firmaResponsabile: firma
+                });
+                setCurrentSheet(prev => ({ ...prev, firmaResponsabile: firma }));
+                showToast('Firma salvata!', 'success');
+              } catch (error) {
+                console.error(error);
+                showToast('Errore salvataggio firma', 'error');
+              }
+            }
           };
 
           const generatePDF = async (sheet) => {
@@ -474,8 +606,8 @@
               return (
                 <div className={`min-h-screen ${bgClass} p-4 flex items-center justify-center`}>
                   <div className={`${cardClass} rounded-xl shadow-lg p-8 text-center`}>
-                    <h1 className="text-2xl font-bold text-red-600 mb-4">❌ Link non valido</h1>
-                    <p className={textClass}>Il link potrebbe essere scaduto o corrotto</p>
+                    <h1 className="text-2xl font-bold text-red-600 mb-4">❌ Foglio non trovato</h1>
+                    <p className={textClass}>Il link potrebbe essere scaduto o non valido</p>
                   </div>
                 </div>
               );
@@ -595,7 +727,7 @@
                       </button>
 
                       <p className={`text-xs text-center ${textClass}`}>
-                        I tuoi dati verranno inviati al responsabile per la conferma finale
+                        I tuoi dati verranno salvati in tempo reale su Firebase
                       </p>
                     </div>
                   </div>
@@ -611,7 +743,7 @@
           return (
             <div className={`min-h-screen ${bgClass} p-4`}>
               <div className="bg-blue-600 text-white py-2 px-4 mb-4 rounded-lg flex justify-between items-center">
-                <p className="font-semibold">👨‍💼 MODALITÀ AMMINISTRATORE</p>
+                <p className="font-semibold">👨‍💼 MODALITÀ AMMINISTRATORE {!db && '⚠️ (Firebase non configurato)'}</p>
                 <button
                   onClick={() => setDarkMode(!darkMode)}
                   className="px-3 py-1 bg-white bg-opacity-20 rounded-lg text-sm"
