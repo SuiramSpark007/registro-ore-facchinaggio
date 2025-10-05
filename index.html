@@ -8,10 +8,12 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
     
     <style>
         .toast {
@@ -30,6 +32,47 @@
             from { transform: translateX(400px); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .swipe-action {
+            position: relative;
+            overflow: hidden;
+        }
+        .hamburger {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .hamburger span {
+            width: 25px;
+            height: 3px;
+            background: white;
+            transition: 0.3s;
+        }
+        @media (max-width: 768px) {
+          .mobile-card {
+            font-size: 0.9rem;
+          }
+          .mobile-buttons {
+            flex-wrap: wrap;
+            gap: 0.5rem;
+          }
+          .mobile-buttons button {
+            flex: 1 1 calc(50% - 0.25rem);
+            min-width: 80px;
+          }
+        }
     </style>
 </head>
 <body>
@@ -39,24 +82,24 @@
     <script type="text/babel">
         const { useState, useRef, useEffect } = React;
         
-        // ⚙️ CONFIGURAZIONE FIREBASE - SOSTITUISCI CON LE TUE CREDENZIALI
+        // ⚙️ CONFIGURAZIONE FIREBASE
         const firebaseConfig = {
-            apiKey: "AIzaSyCg3TOQ1vfqcZ1UTXK3NCMbsjf4_z9zvFc",
-  authDomain: "registroore-963c6.firebaseapp.com",
-  projectId: "registroore-963c6",
-  storageBucket: "registroore-963c6.firebasestorage.app",
-  messagingSenderId: "413364101167",
-  appId: "1:413364101167:web:a83f8023868a717a5fe6da",
-  measurementId: "G-J9SX458Z83"
+          apiKey: "TUA_API_KEY_QUI",
+          authDomain: "tuo-progetto.firebaseapp.com",
+          projectId: "tuo-progetto-id",
+          storageBucket: "tuo-progetto.appspot.com",
+          messagingSenderId: "123456789",
+          appId: "1:123456789:web:abc123"
         };
         
-        // Inizializza Firebase
         let db = null;
+        let storage = null;
         try {
           if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
           }
           db = firebase.firestore();
+          storage = firebase.storage();
           console.log('✅ Firebase connesso!');
         } catch (error) {
           console.error('❌ Errore Firebase:', error);
@@ -80,18 +123,30 @@
           const [savedSheets, setSavedSheets] = useState([]);
           const [userRole, setUserRole] = useState('admin');
           const [darkMode, setDarkMode] = useState(false);
+          const [loading, setLoading] = useState(false);
+          const [currentView, setCurrentView] = useState('list'); // list, dashboard, sheet
+          const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+          const [companyLogo, setCompanyLogo] = useState(null);
+          const [searchTerm, setSearchTerm] = useState('');
+          const [filterDate, setFilterDate] = useState('');
+          const [filterCompany, setFilterCompany] = useState('');
+          const [sortBy, setSortBy] = useState('date'); // date, hours, name
+          const [selectedSheets, setSelectedSheets] = useState([]);
+          
           const [workerData, setWorkerData] = useState({
             nome: '',
             cognome: '',
             oraIn: '',
             oraOut: '',
             pausaMinuti: '',
-            firma: null
+            firma: null,
+            rating: 0
           });
           const [editingWorker, setEditingWorker] = useState(null);
           
           const canvasRef = useRef(null);
           const respCanvasRef = useRef(null);
+          const chartRef = useRef(null);
           const [isDrawing, setIsDrawing] = useState(false);
 
           const calculateHours = (oraIn, oraOut, pausaMinuti = 0) => {
@@ -104,66 +159,62 @@
             return Math.max(0, diffMinutes / 60).toFixed(2);
           };
 
-          // 🔥 Carica fogli da Firebase
+          // 🔥 Carica dati
           useEffect(() => {
-            const loadFromFirebase = async () => {
-              if (!db) {
-                // Fallback a localStorage se Firebase non configurato
-                const saved = JSON.parse(localStorage.getItem('timesheets') || '[]');
-                setSavedSheets(saved);
-                return;
-              }
+            const loadData = async () => {
+              setLoading(true);
+              const savedDarkMode = localStorage.getItem('darkMode') === 'true';
+              setDarkMode(savedDarkMode);
+              
+              const savedLogo = localStorage.getItem('companyLogo');
+              if (savedLogo) setCompanyLogo(savedLogo);
 
-              try {
-                const snapshot = await db.collection('timesheets').get();
-                const sheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setSavedSheets(sheets);
-              } catch (error) {
-                console.error('Errore caricamento:', error);
-                showToast('⚠️ Errore connessione Firebase', 'error');
-              }
-            };
-
-            const urlParams = new URLSearchParams(window.location.search);
-            const mode = urlParams.get('mode');
-            const sheetId = urlParams.get('sheet');
-            
-            const savedDarkMode = localStorage.getItem('darkMode') === 'true';
-            setDarkMode(savedDarkMode);
-
-            if (mode === 'worker' && sheetId) {
-              setUserRole('worker');
-              // Carica foglio specifico da Firebase
-              if (db) {
-                db.collection('timesheets').doc(sheetId).get()
-                  .then(doc => {
+              const urlParams = new URLSearchParams(window.location.search);
+              const mode = urlParams.get('mode');
+              const sheetId = urlParams.get('sheet');
+              
+              if (mode === 'worker' && sheetId) {
+                setUserRole('worker');
+                if (db) {
+                  try {
+                    const doc = await db.collection('timesheets').doc(sheetId).get();
                     if (doc.exists) {
                       setCurrentSheet({ id: doc.id, ...doc.data() });
                     } else {
                       showToast('Foglio non trovato', 'error');
                     }
-                  })
-                  .catch(err => {
+                  } catch (err) {
                     console.error(err);
-                    showToast('Errore caricamento foglio', 'error');
-                  });
+                    showToast('Errore caricamento', 'error');
+                  }
+                }
+              } else {
+                setUserRole('admin');
+                if (db) {
+                  try {
+                    const snapshot = await db.collection('timesheets').get();
+                    const sheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setSavedSheets(sheets);
+                  } catch (error) {
+                    console.error('Errore:', error);
+                    showToast('⚠️ Errore Firebase', 'error');
+                  }
+                }
               }
-            } else {
-              setUserRole('admin');
-              loadFromFirebase();
-            }
+              setLoading(false);
+            };
+
+            loadData();
           }, []);
 
-          // 🔥 Listener in tempo reale per aggiornamenti
+          // 🔥 Listener tempo reale
           useEffect(() => {
             if (userRole === 'admin' && db) {
               const unsubscribe = db.collection('timesheets')
                 .onSnapshot(snapshot => {
                   const sheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                   setSavedSheets(sheets);
-                }, error => {
-                  console.error('Errore listener:', error);
-                });
+                }, error => console.error('Errore listener:', error));
 
               return () => unsubscribe();
             }
@@ -236,7 +287,22 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
           };
 
-          // 🔥 Worker salva su Firebase
+          // 📤 Upload logo
+          const handleLogoUpload = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const logoData = e.target.result;
+                setCompanyLogo(logoData);
+                localStorage.setItem('companyLogo', logoData);
+                showToast('Logo caricato!', 'success');
+              };
+              reader.readAsDataURL(file);
+            }
+          };
+
+          // 🔥 Worker salva
           const saveWorkerData = async () => {
             if (!workerData.nome || !workerData.cognome || !workerData.oraIn || !workerData.oraOut) {
               showToast('Compila tutti i campi obbligatori', 'error');
@@ -248,6 +314,7 @@
               return;
             }
 
+            setLoading(true);
             const firma = canvasRef.current.toDataURL('image/png');
             const oreTotali = calculateHours(workerData.oraIn, workerData.oraOut, workerData.pausaMinuti);
             
@@ -261,11 +328,11 @@
 
             if (!db) {
               showToast('❌ Firebase non configurato', 'error');
+              setLoading(false);
               return;
             }
 
             try {
-              // Aggiungi worker al foglio su Firebase
               await db.collection('timesheets').doc(currentSheet.id).update({
                 lavoratori: firebase.firestore.FieldValue.arrayUnion(worker)
               });
@@ -273,17 +340,16 @@
               showToast('✅ Dati inviati con successo!', 'success');
               
               setTimeout(() => {
-                showToast('Puoi chiudere questa pagina', 'info');
-                setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null });
+                setWorkerData({ nome: '', cognome: '', oraIn: '', oraOut: '', pausaMinuti: '', firma: null, rating: 0 });
                 if (canvasRef.current) initCanvas(canvasRef.current);
               }, 2000);
             } catch (error) {
               console.error(error);
               showToast('Errore invio dati', 'error');
             }
+            setLoading(false);
           };
 
-          // 🔥 Crea nuovo foglio su Firebase
           const createNewSheet = async () => {
             const newSheet = {
               data: new Date().toISOString().split('T')[0],
@@ -298,29 +364,28 @@
               createdAt: new Date().toISOString()
             };
 
+            setLoading(true);
             if (db) {
               try {
                 const docRef = await db.collection('timesheets').add(newSheet);
                 setCurrentSheet({ id: docRef.id, ...newSheet });
+                setCurrentView('sheet');
                 showToast('Nuovo foglio creato', 'success');
               } catch (error) {
                 console.error(error);
                 showToast('Errore creazione foglio', 'error');
               }
-            } else {
-              // Fallback localStorage
-              const id = Date.now().toString();
-              setCurrentSheet({ id, ...newSheet });
             }
+            setLoading(false);
           };
 
-          // 🔥 Salva foglio su Firebase
           const saveSheet = async () => {
             if (!currentSheet.titoloAzienda || !currentSheet.responsabile) {
               showToast('Inserisci almeno azienda e responsabile', 'error');
               return;
             }
 
+            setLoading(true);
             if (db) {
               try {
                 await db.collection('timesheets').doc(currentSheet.id).set(currentSheet, { merge: true });
@@ -329,9 +394,8 @@
                 console.error(error);
                 showToast('Errore salvataggio', 'error');
               }
-            } else {
-              showToast('⚠️ Firebase non configurato', 'error');
             }
+            setLoading(false);
           };
 
           const generateShareLink = () => {
@@ -353,11 +417,12 @@
 
           const loadSheet = (sheet) => {
             setCurrentSheet(sheet);
+            setCurrentView('sheet');
           };
 
-          // 🔥 Elimina da Firebase
           const deleteSheet = async (sheetId) => {
             if (confirm('Sei sicuro di voler eliminare questo foglio?')) {
+              setLoading(true);
               if (db) {
                 try {
                   await db.collection('timesheets').doc(sheetId).delete();
@@ -367,11 +432,12 @@
                   showToast('Errore eliminazione', 'error');
                 }
               }
+              setLoading(false);
             }
           };
 
-          // 🔥 Archivia su Firebase
           const archiveSheet = async (sheetId) => {
+            setLoading(true);
             if (db) {
               try {
                 const doc = await db.collection('timesheets').doc(sheetId).get();
@@ -385,15 +451,43 @@
                 showToast('Errore archiviazione', 'error');
               }
             }
+            setLoading(false);
+          };
+
+          // 🗑️ Elimina multipli
+          const deleteSelectedSheets = async () => {
+            if (selectedSheets.length === 0) {
+              showToast('Nessun foglio selezionato', 'error');
+              return;
+            }
+
+            if (confirm(`Eliminare ${selectedSheets.length} fogli?`)) {
+              setLoading(true);
+              if (db) {
+                try {
+                  const batch = db.batch();
+                  selectedSheets.forEach(id => {
+                    const ref = db.collection('timesheets').doc(id);
+                    batch.delete(ref);
+                  });
+                  await batch.commit();
+                  setSelectedSheets([]);
+                  showToast(`${selectedSheets.length} fogli eliminati`, 'success');
+                } catch (error) {
+                  console.error(error);
+                  showToast('Errore eliminazione multipla', 'error');
+                }
+              }
+              setLoading(false);
+            }
           };
 
           const updateWorker = async () => {
             if (!editingWorker) return;
 
+            setLoading(true);
             const oreTotali = calculateHours(editingWorker.oraIn, editingWorker.oraOut, editingWorker.pausaMinuti);
-            
             const updatedWorker = { ...editingWorker, oreTotali, modificato: true };
-            
             const updatedLavoratori = currentSheet.lavoratori.map(w => 
               w.id === editingWorker.id ? updatedWorker : w
             );
@@ -411,10 +505,12 @@
                 showToast('Errore aggiornamento', 'error');
               }
             }
+            setLoading(false);
           };
 
           const deleteWorker = async (workerId) => {
             if (confirm('Eliminare questo lavoratore?')) {
+              setLoading(true);
               const updatedLavoratori = currentSheet.lavoratori.filter(w => w.id !== workerId);
               
               if (db) {
@@ -429,6 +525,7 @@
                   showToast('Errore eliminazione', 'error');
                 }
               }
+              setLoading(false);
             }
           };
 
@@ -448,6 +545,7 @@
               return;
             }
 
+            setLoading(true);
             const completedSheet = {
               ...currentSheet,
               status: 'completed',
@@ -460,15 +558,19 @@
                 await generatePDF(completedSheet);
                 showToast('✅ Foglio completato! PDF generato', 'success');
                 setCurrentSheet(null);
+                setCurrentView('list');
               } catch (error) {
                 console.error(error);
                 showToast('Errore completamento', 'error');
               }
             }
+            setLoading(false);
           };
 
           const saveResponsabileSignature = async () => {
             if (!respCanvasRef.current) return;
+            
+            setLoading(true);
             const firma = respCanvasRef.current.toDataURL('image/png');
             
             if (db) {
@@ -483,29 +585,38 @@
                 showToast('Errore salvataggio firma', 'error');
               }
             }
+            setLoading(false);
           };
 
           const generatePDF = async (sheet) => {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             canvas.width = 1000;
-            canvas.height = 500 + (sheet.lavoratori.length * 140) + 250;
+            canvas.height = 600 + (sheet.lavoratori.length * 140) + 250;
             
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
+            // Logo aziendale
+            if (companyLogo) {
+              const logoImg = new Image();
+              logoImg.src = companyLogo;
+              await new Promise(resolve => { logoImg.onload = resolve; logoImg.onerror = resolve; });
+              ctx.drawImage(logoImg, 50, 30, 120, 60);
+            }
+            
             ctx.fillStyle = '#1e40af';
-            ctx.fillRect(0, 0, canvas.width, 120);
+            ctx.fillRect(0, 120, canvas.width, 100);
             
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 32px Arial';
-            ctx.fillText('REGISTRO ORE LAVORO', 50, 50);
+            ctx.fillText('REGISTRO ORE LAVORO', companyLogo ? 200 : 50, 160);
             ctx.font = 'bold 24px Arial';
-            ctx.fillText(sheet.titoloAzienda || 'AZIENDA', 50, 90);
+            ctx.fillText(sheet.titoloAzienda || 'AZIENDA', companyLogo ? 200 : 50, 195);
             
             ctx.fillStyle = '#000000';
             ctx.font = 'bold 18px Arial';
-            let y = 160;
+            let y = 260;
             ctx.fillText('Data: ' + sheet.data, 50, y);
             y += 30;
             ctx.fillText('Responsabile: ' + (sheet.responsabile || 'N/A'), 50, y);
@@ -523,7 +634,8 @@
             ctx.fillText('ORA OUT', 450, y + 25);
             ctx.fillText('PAUSA', 560, y + 25);
             ctx.fillText('TOT ORE', 650, y + 25);
-            ctx.fillText('FIRMA', 770, y + 25);
+            ctx.fillText('⭐', 740, y + 25);
+            ctx.fillText('FIRMA', 800, y + 25);
             y += 40;
             
             ctx.fillStyle = '#000000';
@@ -549,6 +661,7 @@
               ctx.fillText((worker.pausaMinuti || '0') + 'min', 560, rowY + 30);
               ctx.font = 'bold 17px Arial';
               ctx.fillText(worker.oreTotali + 'h', 650, rowY + 30);
+              ctx.fillText('⭐'.repeat(worker.rating || 0), 740, rowY + 30);
               totalOre += parseFloat(worker.oreTotali);
               
               if (worker.modificato) {
@@ -562,7 +675,7 @@
                 const img = new Image();
                 img.src = worker.firma;
                 await new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
-                ctx.drawImage(img, 770, rowY + 10, 140, 55);
+                ctx.drawImage(img, 800, rowY + 10, 120, 50);
               }
             }
             
@@ -595,10 +708,108 @@
             });
           };
 
+          // 📊 Calcola statistiche
+          const getStatistics = () => {
+            const now = new Date();
+            const thisWeek = savedSheets.filter(s => {
+              const sheetDate = new Date(s.data);
+              const diff = (now - sheetDate) / (1000 * 60 * 60 * 24);
+              return diff <= 7;
+            });
+
+            const thisMonth = savedSheets.filter(s => {
+              const sheetDate = new Date(s.data);
+              return sheetDate.getMonth() === now.getMonth() && 
+                     sheetDate.getFullYear() === now.getFullYear();
+            });
+
+            const weeklyHours = thisWeek.reduce((acc, sheet) => {
+              return acc + (sheet.lavoratori || []).reduce((sum, w) => sum + parseFloat(w.oreTotali || 0), 0);
+            }, 0);
+
+            const monthlyHours = thisMonth.reduce((acc, sheet) => {
+              return acc + (sheet.lavoratori || []).reduce((sum, w) => sum + parseFloat(w.oreTotali || 0), 0);
+            }, 0);
+
+            // Top 3 lavoratori
+            const workerStats = {};
+            savedSheets.forEach(sheet => {
+              (sheet.lavoratori || []).forEach(w => {
+                const name = `${w.nome} ${w.cognome}`;
+                if (!workerStats[name]) {
+                  workerStats[name] = { hours: 0, count: 0, rating: 0 };
+                }
+                workerStats[name].hours += parseFloat(w.oreTotali || 0);
+                workerStats[name].count += 1;
+                workerStats[name].rating += w.rating || 0;
+              });
+            });
+
+            const topWorkers = Object.entries(workerStats)
+              .map(([name, stats]) => ({ name, ...stats, avgRating: stats.rating / stats.count }))
+              .sort((a, b) => b.hours - a.hours)
+              .slice(0, 3);
+
+            return { weeklyHours, monthlyHours, topWorkers, thisWeek, thisMonth };
+          };
+
+          // 🔍 Filtra fogli
+          const getFilteredSheets = () => {
+            let filtered = savedSheets.filter(s => !s.archived);
+
+            if (searchTerm) {
+              filtered = filtered.filter(s => {
+                const searchLower = searchTerm.toLowerCase();
+                return (s.titoloAzienda || '').toLowerCase().includes(searchLower) ||
+                       (s.responsabile || '').toLowerCase().includes(searchLower) ||
+                       (s.lavoratori || []).some(w => 
+                         `${w.nome} ${w.cognome}`.toLowerCase().includes(searchLower)
+                       );
+              });
+            }
+
+            if (filterDate) {
+              filtered = filtered.filter(s => s.data === filterDate);
+            }
+
+            if (filterCompany) {
+              filtered = filtered.filter(s => 
+                (s.titoloAzienda || '').toLowerCase().includes(filterCompany.toLowerCase())
+              );
+            }
+
+            // Ordina
+            if (sortBy === 'date') {
+              filtered.sort((a, b) => new Date(b.data) - new Date(a.data));
+            } else if (sortBy === 'hours') {
+              filtered.sort((a, b) => {
+                const aHours = (a.lavoratori || []).reduce((sum, w) => sum + parseFloat(w.oreTotali || 0), 0);
+                const bHours = (b.lavoratori || []).reduce((sum, w) => sum + parseFloat(w.oreTotali || 0), 0);
+                return bHours - aHours;
+              });
+            } else if (sortBy === 'name') {
+              filtered.sort((a, b) => (a.titoloAzienda || '').localeCompare(b.titoloAzienda || ''));
+            }
+
+            return filtered;
+          };
+
           const bgClass = darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-blue-50 to-indigo-100';
           const cardClass = darkMode ? 'bg-gray-800 text-white' : 'bg-white';
           const inputClass = darkMode ? 'bg-gray-700 text-white border-gray-600' : 'bg-white border-gray-300';
           const textClass = darkMode ? 'text-gray-300' : 'text-gray-600';
+
+          // LOADING
+          if (loading) {
+            return (
+              <div className={`min-h-screen ${bgClass} flex items-center justify-center`}>
+                <div className="text-center">
+                  <div className="loader mx-auto mb-4"></div>
+                  <p className={textClass}>Caricamento...</p>
+                </div>
+              </div>
+            );
+          }
 
           // WORKER VIEW
           if (userRole === 'worker') {
@@ -615,18 +826,31 @@
 
             return (
               <div className={`min-h-screen ${bgClass} p-4`}>
-                <div className="bg-green-600 text-white py-2 px-4 mb-4 rounded-lg">
-                  <p className="text-center font-semibold">👷‍♂️ MODALITÀ LAVORATORE</p>
+                <div className="bg-green-600 text-white py-3 px-4 mb-4 rounded-lg flex items-center justify-between">
+                  <p className="font-semibold">👷‍♂️ MODALITÀ LAVORATORE</p>
+                  {companyLogo && <img src={companyLogo} alt="Logo" className="h-10" />}
                 </div>
                 <div className="max-w-2xl mx-auto">
                   <div className={`${cardClass} rounded-xl shadow-lg p-6`}>
                     <div className="text-center mb-6">
-                      <h1 className="text-2xl font-bold text-green-800">👷‍♂️ Registra le tue ore</h1>
-                      <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
-                        <p className="font-semibold text-lg">{currentSheet.titoloAzienda}</p>
-                        <p className={`text-sm ${textClass}`}>Responsabile: {currentSheet.responsabile}</p>
-                        <p className={`text-sm ${textClass}`}>Data: {currentSheet.data}</p>
-                        {currentSheet.location && <p className={`text-sm ${textClass}`}>📍 {currentSheet.location}</p>}
+                      <h1 className="text-2xl font-bold mb-4" style={{color: darkMode ? '#10b981' : '#047857'}}>
+                        👷‍♂️ Registra le tue ore
+                      </h1>
+                      <div className={`p-4 rounded-lg ${darkMode ? 'bg-gray-700' : 'bg-gradient-to-r from-blue-50 to-indigo-50'}`}>
+                        <p className={`font-semibold text-lg mb-1 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                          {currentSheet.titoloAzienda}
+                        </p>
+                        <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Responsabile: {currentSheet.responsabile}
+                        </p>
+                        <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Data: {currentSheet.data}
+                        </p>
+                        {currentSheet.location && (
+                          <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            📍 {currentSheet.location}
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -685,6 +909,21 @@
                         />
                       </div>
 
+                      <div>
+                        <label className="block text-sm font-medium mb-2">⭐ Autovalutazione</label>
+                        <div className="flex gap-2">
+                          {[1,2,3,4,5].map(star => (
+                            <button
+                              key={star}
+                              onClick={() => setWorkerData(prev => ({ ...prev, rating: star }))}
+                              className={`text-3xl ${workerData.rating >= star ? 'text-yellow-400' : 'text-gray-300'}`}
+                            >
+                              ⭐
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
                       {workerData.oraIn && workerData.oraOut && (
                         <div className="p-4 bg-green-100 dark:bg-green-900 rounded-lg">
                           <p className="font-bold text-green-800 dark:text-green-300 text-xl">
@@ -736,319 +975,495 @@
             );
           }
 
-          // ADMIN VIEW
-          const activeSheets = savedSheets.filter(s => !s.archived);
+          // ADMIN VIEW - Dashboard
+          if (currentView === 'dashboard') {
+            const stats = getStatistics();
+            
+            return (
+              <div className={`min-h-screen ${bgClass} p-4`}>
+                <div className="bg-blue-600 text-white py-3 px-4 mb-4 rounded-lg flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden">
+                      <div className="hamburger">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
+                    </button>
+                    <p className="font-semibold">📊 DASHBOARD</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {companyLogo && <img src={companyLogo} alt="Logo" className="h-10" />}
+                    <button
+                      onClick={() => setDarkMode(!darkMode)}
+                      className="px-3 py-1 bg-white bg-opacity-20 rounded-lg text-sm"
+                    >
+                      {darkMode ? '☀️' : '🌙'}
+                    </button>
+                  </div>
+                </div>
+
+                {mobileMenuOpen && (
+                  <div className={`${cardClass} rounded-lg p-4 mb-4 md:hidden`}>
+                    <button onClick={() => { setCurrentView('list'); setMobileMenuOpen(false); }} className="w-full text-left py-2">
+                      📂 Fogli
+                    </button>
+                    <button onClick={() => { setCurrentView('dashboard'); setMobileMenuOpen(false); }} className="w-full text-left py-2">
+                      📊 Dashboard
+                    </button>
+                  </div>
+                )}
+
+                <div className="max-w-7xl mx-auto space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className={`${cardClass} rounded-xl shadow-lg p-6`}>
+                      <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ore Settimanali</h3>
+                      <p className="text-4xl font-bold text-blue-600 mt-2">{stats.weeklyHours.toFixed(1)}h</p>
+                    </div>
+                    <div className={`${cardClass} rounded-xl shadow-lg p-6`}>
+                      <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ore Mensili</h3>
+                      <p className="text-4xl font-bold text-green-600 mt-2">{stats.monthlyHours.toFixed(1)}h</p>
+                    </div>
+                    <div className={`${cardClass} rounded-xl shadow-lg p-6`}>
+                      <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Fogli Attivi</h3>
+                      <p className="text-4xl font-bold text-purple-600 mt-2">{savedSheets.filter(s => !s.archived).length}</p>
+                    </div>
+                  </div>
+
+                  <div className={`${cardClass} rounded-xl shadow-lg p-6`}>
+                    <h3 className="text-xl font-bold mb-4">🏆 Top 3 Lavoratori del Mese</h3>
+                    {stats.topWorkers.map((worker, i) => (
+                      <div key={i} className="flex justify-between items-center p-4 mb-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <div>
+                          <p className="font-semibold">{i + 1}. {worker.name}</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-300">{worker.count} giorni lavorati</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-blue-600">{worker.hours.toFixed(1)}h</p>
+                          <p className="text-sm">{'⭐'.repeat(Math.round(worker.avgRating))}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => setCurrentView('list')}
+                      className="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold"
+                    >
+                      ← Torna ai Fogli
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ADMIN VIEW - List
+          const activeSheets = getFilteredSheets();
           const archivedSheets = savedSheets.filter(s => s.archived);
 
-          return (
-            <div className={`min-h-screen ${bgClass} p-4`}>
-              <div className="bg-blue-600 text-white py-2 px-4 mb-4 rounded-lg flex justify-between items-center">
-                <p className="font-semibold">👨‍💼 MODALITÀ AMMINISTRATORE {!db && '⚠️ (Firebase non configurato)'}</p>
-                <button
-                  onClick={() => setDarkMode(!darkMode)}
-                  className="px-3 py-1 bg-white bg-opacity-20 rounded-lg text-sm"
-                >
-                  {darkMode ? '☀️ Light' : '🌙 Dark'}
-                </button>
-              </div>
-              <div className="max-w-6xl mx-auto">
-                <div className={`${cardClass} rounded-xl shadow-lg p-6 mb-6`}>
-                  <h1 className="text-3xl font-bold mb-6">👨‍💼 Pannello Amministratore</h1>
+          if (currentView === 'list') {
+            return (
+              <div className={`min-h-screen ${bgClass} p-4`}>
+                <div className="bg-blue-600 text-white py-3 px-4 mb-4 rounded-lg flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden">
+                      <div className="hamburger">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
+                    </button>
+                    <p className="font-semibold">👨‍💼 AMMINISTRATORE {!db && '⚠️'}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {companyLogo && <img src={companyLogo} alt="Logo" className="h-10" />}
+                    <button
+                      onClick={() => setDarkMode(!darkMode)}
+                      className="px-3 py-1 bg-white bg-opacity-20 rounded-lg text-sm"
+                    >
+                      {darkMode ? '☀️' : '🌙'}
+                    </button>
+                  </div>
+                </div>
 
-                  {!currentSheet ? (
-                    <div>
-                      <button
-                        onClick={createNewSheet}
-                        className="w-full py-4 bg-blue-600 text-white rounded-lg font-bold text-lg hover:bg-blue-700 mb-6"
+                {mobileMenuOpen && (
+                  <div className={`${cardClass} rounded-lg p-4 mb-4 md:hidden`}>
+                    <button onClick={() => { setCurrentView('list'); setMobileMenuOpen(false); }} className="w-full text-left py-2">
+                      📂 Fogli
+                    </button>
+                    <button onClick={() => { setCurrentView('dashboard'); setMobileMenuOpen(false); }} className="w-full text-left py-2">
+                      📊 Dashboard
+                    </button>
+                    <label className="w-full text-left py-2 flex items-center gap-2 cursor-pointer">
+                      🏢 Logo
+                      <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                    </label>
+                  </div>
+                )}
+
+                <div className="max-w-7xl mx-auto">
+                  <div className={`${cardClass} rounded-xl shadow-lg p-4 md:p-6 mb-6`}>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                      <h1 className="text-2xl md:text-3xl font-bold">👨‍💼 Pannello Amministratore</h1>
+                      <div className="hidden md:flex items-center gap-3">
+                        <button onClick={() => setCurrentView('dashboard')} className="px-4 py-2 bg-purple-600 text-white rounded-lg">
+                          📊 Dashboard
+                        </button>
+                        <label className="px-4 py-2 bg-gray-600 text-white rounded-lg cursor-pointer">
+                          🏢 Logo
+                          <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                      <input
+                        type="text"
+                        placeholder="🔍 Cerca per nome, azienda..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className={`p-3 border rounded-lg ${inputClass}`}
+                      />
+                      <input
+                        type="date"
+                        value={filterDate}
+                        onChange={(e) => setFilterDate(e.target.value)}
+                        className={`p-3 border rounded-lg ${inputClass}`}
+                      />
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className={`p-3 border rounded-lg ${inputClass}`}
                       >
-                        + CREA NUOVO FOGLIO
-                      </button>
+                        <option value="date">Ordina per Data</option>
+                        <option value="hours">Ordina per Ore</option>
+                        <option value="name">Ordina per Nome</option>
+                      </select>
+                    </div>
 
-                      {activeSheets.length > 0 && (
-                        <div className="mb-6">
-                          <h2 className="text-xl font-bold mb-4">📂 Fogli Attivi</h2>
-                          <div className="space-y-3">
-                            {activeSheets.slice().reverse().map(sheet => (
-                              <div key={sheet.id} className={`border ${darkMode ? 'border-gray-700' : 'border-gray-200'} rounded-lg p-4 flex justify-between items-center`}>
-                                <div>
-                                  <p className="font-semibold">{sheet.titoloAzienda || 'Senza titolo'}</p>
+                    {selectedSheets.length > 0 && (
+                      <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900 rounded-lg flex justify-between items-center">
+                        <span>{selectedSheets.length} selezionati</span>
+                        <button onClick={deleteSelectedSheets} className="px-4 py-2 bg-red-600 text-white rounded">
+                          🗑️ Elimina selezionati
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={createNewSheet}
+                      className="w-full py-4 bg-blue-600 text-white rounded-lg font-bold text-lg hover:bg-blue-700 mb-6"
+                    >
+                      + CREA NUOVO FOGLIO
+                    </button>
+
+                    {activeSheets.length > 0 && (
+                      <div className="mb-6">
+                        <h2 className="text-xl font-bold mb-4">📂 Fogli Attivi ({activeSheets.length})</h2>
+                        <div className="space-y-3">
+                          {activeSheets.map(sheet => (
+                            <div key={sheet.id} className={`border ${darkMode ? 'border-gray-700' : 'border-gray-200'} rounded-lg p-4 mobile-card`}>
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedSheets.includes(sheet.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedSheets([...selectedSheets, sheet.id]);
+                                    } else {
+                                      setSelectedSheets(selectedSheets.filter(id => id !== sheet.id));
+                                    }
+                                  }}
+                                  className="mt-1"
+                                />
+                                <div className="flex-1">
+                                  <p className="font-semibold text-lg">{sheet.titoloAzienda || 'Senza titolo'}</p>
                                   <p className={`text-sm ${textClass}`}>
                                     {sheet.data} | {sheet.lavoratori?.length || 0} lavoratori
                                     {sheet.status === 'completed' && ' | ✅ Completato'}
                                   </p>
                                 </div>
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => loadSheet(sheet)}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded"
-                                  >
-                                    Apri
-                                  </button>
-                                  <button
-                                    onClick={() => archiveSheet(sheet.id)}
-                                    className="px-4 py-2 bg-yellow-600 text-white rounded"
-                                  >
-                                    📦
-                                  </button>
-                                  <button
-                                    onClick={() => deleteSheet(sheet.id)}
-                                    className="px-4 py-2 bg-red-600 text-white rounded"
-                                  >
-                                    🗑️
-                                  </button>
-                                  {sheet.status === 'completed' && (
-                                    <button
-                                      onClick={() => generatePDF(sheet)}
-                                      className="px-4 py-2 bg-green-600 text-white rounded"
-                                    >
-                                      📄 PDF
-                                    </button>
-                                  )}
-                                </div>
                               </div>
-                            ))}
-                          </div>
+                              <div className="flex gap-2 mt-3 mobile-buttons">
+                                <button
+                                  onClick={() => loadSheet(sheet)}
+                                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm"
+                                >
+                                  Apri
+                                </button>
+                                <button
+                                  onClick={() => archiveSheet(sheet.id)}
+                                  className="px-4 py-2 bg-yellow-600 text-white rounded text-sm"
+                                >
+                                  📦
+                                </button>
+                                <button
+                                  onClick={() => deleteSheet(sheet.id)}
+                                  className="px-4 py-2 bg-red-600 text-white rounded text-sm"
+                                >
+                                  🗑️
+                                </button>
+                                {sheet.status === 'completed' && (
+                                  <button
+                                    onClick={() => generatePDF(sheet)}
+                                    className="px-4 py-2 bg-green-600 text-white rounded text-sm"
+                                  >
+                                    📄
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      )}
+                      </div>
+                    )}
 
-                      {archivedSheets.length > 0 && (
-                        <div>
-                          <h2 className="text-xl font-bold mb-4">📦 Fogli Archiviati</h2>
-                          <div className="space-y-3">
-                            {archivedSheets.slice().reverse().map(sheet => (
-                              <div key={sheet.id} className={`border ${darkMode ? 'border-gray-700' : 'border-gray-200'} rounded-lg p-4 flex justify-between items-center opacity-60`}>
+                    {archivedSheets.length > 0 && (
+                      <div>
+                        <h2 className="text-xl font-bold mb-4">📦 Fogli Archiviati ({archivedSheets.length})</h2>
+                        <div className="space-y-3">
+                          {archivedSheets.slice().reverse().map(sheet => (
+                            <div key={sheet.id} className={`border ${darkMode ? 'border-gray-700' : 'border-gray-200'} rounded-lg p-4 opacity-60`}>
+                              <div className="flex justify-between items-center">
                                 <div>
                                   <p className="font-semibold">{sheet.titoloAzienda || 'Senza titolo'}</p>
                                   <p className={`text-sm ${textClass}`}>
                                     {sheet.data} | {sheet.lavoratori?.length || 0} lavoratori
                                   </p>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 mobile-buttons">
                                   <button
                                     onClick={() => archiveSheet(sheet.id)}
-                                    className="px-4 py-2 bg-green-600 text-white rounded"
+                                    className="px-4 py-2 bg-green-600 text-white rounded text-sm"
                                   >
-                                    ♻️ Ripristina
+                                    ♻️
                                   </button>
                                   <button
                                     onClick={() => deleteSheet(sheet.id)}
-                                    className="px-4 py-2 bg-red-600 text-white rounded"
+                                    className="px-4 py-2 bg-red-600 text-white rounded text-sm"
                                   >
                                     🗑️
                                   </button>
                                 </div>
                               </div>
-                            ))}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ADMIN VIEW - Sheet Detail (continua come prima ma con le modifiche responsive)
+          return (
+            <div className={`min-h-screen ${bgClass} p-4`}>
+              <div className="bg-blue-600 text-white py-3 px-4 mb-4 rounded-lg flex justify-between items-center">
+                <p className="font-semibold">✏️ MODIFICA FOGLIO</p>
+                <div className="flex items-center gap-3">
+                  {companyLogo && <img src={companyLogo} alt="Logo" className="h-10" />}
+                  <button
+                    onClick={() => setDarkMode(!darkMode)}
+                    className="px-3 py-1 bg-white bg-opacity-20 rounded-lg text-sm"
+                  >
+                    {darkMode ? '☀️' : '🌙'}
+                  </button>
+                </div>
+              </div>
+              
+              <div className="max-w-6xl mx-auto">
+                <div className={`${cardClass} rounded-xl shadow-lg p-4 md:p-6 mb-6`}>
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Azienda Cliente *</label>
+                        <input
+                          type="text"
+                          value={currentSheet.titoloAzienda}
+                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, titoloAzienda: e.target.value }))}
+                          placeholder="Es: Amazon, DHL"
+                          className={`w-full p-3 border rounded-lg ${inputClass}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Data</label>
+                        <input
+                          type="date"
+                          value={currentSheet.data}
+                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, data: e.target.value }))}
+                          className={`w-full p-3 border rounded-lg ${inputClass}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Responsabile *</label>
+                        <input
+                          type="text"
+                          value={currentSheet.responsabile}
+                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, responsabile: e.target.value }))}
+                          placeholder="Tuo nome"
+                          className={`w-full p-3 border rounded-lg ${inputClass}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Località</label>
+                        <input
+                          type="text"
+                          value={currentSheet.location}
+                          onChange={(e) => setCurrentSheet(prev => ({ ...prev, location: e.target.value }))}
+                          placeholder="Indirizzo"
+                          className={`w-full p-3 border rounded-lg ${inputClass}`}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row gap-3">
+                      <button
+                        onClick={saveSheet}
+                        className="flex-1 py-3 bg-green-600 text-white rounded-lg font-semibold"
+                      >
+                        💾 Salva
+                      </button>
+                      <button
+                        onClick={generateShareLink}
+                        className="flex-1 py-3 bg-purple-600 text-white rounded-lg font-semibold"
+                      >
+                        📤 Genera Link
+                      </button>
+                    </div>
+
+                    <div>
+                      <h3 className="text-lg font-semibold mb-3">Lavoratori Registrati ({currentSheet.lavoratori?.length || 0})</h3>
+                      {currentSheet.lavoratori && currentSheet.lavoratori.length > 0 ? (
+                        currentSheet.lavoratori.map((worker) => (
+                          <div key={worker.id} className={`${darkMode ? 'bg-gray-700' : 'bg-gray-50'} p-4 rounded-lg mb-3`}>
+                            {editingWorker?.id === worker.id ? (
+                              <div className="space-y-3">
+                                <p className="font-semibold">{worker.nome} {worker.cognome}</p>
+                                <div className="grid grid-cols-3 gap-3">
+                                  <div>
+                                    <label className="text-xs">Ora IN</label>
+                                    <input
+                                      type="time"
+                                      value={editingWorker.oraIn}
+                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraIn: e.target.value }))}
+                                      className={`w-full p-2 border rounded ${inputClass}`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-xs">Ora OUT</label>
+                                    <input
+                                      type="time"
+                                      value={editingWorker.oraOut}
+                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, oraOut: e.target.value }))}
+                                      className={`w-full p-2 border rounded ${inputClass}`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-xs">Pausa</label>
+                                    <input
+                                      type="number"
+                                      value={editingWorker.pausaMinuti}
+                                      onChange={(e) => setEditingWorker(prev => ({ ...prev, pausaMinuti: e.target.value }))}
+                                      className={`w-full p-2 border rounded ${inputClass}`}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={updateWorker} className="px-4 py-2 bg-green-600 text-white rounded">
+                                    Salva
+                                  </button>
+                                  <button onClick={() => setEditingWorker(null)} className="px-4 py-2 bg-gray-500 text-white rounded">
+                                    Annulla
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col md:flex-row justify-between md:items-center gap-3">
+                                <div>
+                                  <p className="font-semibold">{worker.nome} {worker.cognome}</p>
+                                  <p className={`text-sm ${textClass}`}>
+                                    {worker.oraIn} - {worker.oraOut} | Pausa: {worker.pausaMinuti || 0}min | 
+                                    <span className="font-bold text-blue-600"> {worker.oreTotali}h</span>
+                                    {worker.rating > 0 && <span className="ml-2">{'⭐'.repeat(worker.rating)}</span>}
+                                    {worker.modificato && <span className="text-red-600 ml-2">(modificato)</span>}
+                                  </p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => setEditingWorker(worker)} className="px-3 py-1 bg-blue-500 text-white rounded text-sm">
+                                    ✏️
+                                  </button>
+                                  <button onClick={() => deleteWorker(worker.id)} className="px-3 py-1 bg-red-500 text-white rounded text-sm">
+                                    🗑️
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className={`${textClass} text-center py-4`}>Nessun lavoratore ancora registrato</p>
+                      )}
+                    </div>
+
+                    <div className="border-t pt-6">
+                      <h3 className="text-lg font-semibold mb-3">✏️ Firma Responsabile</h3>
+                      {currentSheet.firmaResponsabile ? (
+                        <div>
+                          <img src={currentSheet.firmaResponsabile} className="border rounded mb-3 w-full max-w-md" alt="Firma" />
+                          <button
+                            onClick={() => setCurrentSheet(prev => ({ ...prev, firmaResponsabile: null }))}
+                            className="px-4 py-2 bg-red-500 text-white rounded"
+                          >
+                            Cancella Firma
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className={`text-sm ${textClass} mb-2`}>Firma con il mouse o con il dito</p>
+                          <canvas
+                            ref={respCanvasRef}
+                            width={600}
+                            height={200}
+                            onMouseDown={startDrawing}
+                            onMouseMove={draw}
+                            onMouseUp={stopDrawing}
+                            onTouchStart={startDrawing}
+                            onTouchMove={draw}
+                            onTouchEnd={stopDrawing}
+                            className="border-2 border-blue-500 rounded w-full bg-white mb-3"
+                            style={{ touchAction: 'none' }}
+                          />
+                          <div className="flex gap-2">
+                            <button onClick={saveResponsabileSignature} className="px-4 py-2 bg-green-600 text-white rounded">
+                              Salva Firma
+                            </button>
+                            <button onClick={clearSignature} className="px-4 py-2 bg-gray-500 text-white rounded">
+                              Cancella
+                            </button>
                           </div>
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <div className="space-y-6">
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Azienda Cliente *</label>
-                          <input
-                            type="text"
-                            value={currentSheet.titoloAzienda}
-                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, titoloAzienda: e.target.value }))}
-                            placeholder="Es: Amazon, DHL"
-                            className={`w-full p-3 border rounded-lg ${inputClass}`}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Data</label>
-                          <input
-                            type="date"
-                            value={currentSheet.data}
-                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, data: e.target.value }))}
-                            className={`w-full p-3 border rounded-lg ${inputClass}`}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Responsabile *</label>
-                          <input
-                            type="text"
-                            value={currentSheet.responsabile}
-                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, responsabile: e.target.value }))}
-                            placeholder="Tuo nome"
-                            className={`w-full p-3 border rounded-lg ${inputClass}`}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Località</label>
-                          <input
-                            type="text"
-                            value={currentSheet.location}
-                            onChange={(e) => setCurrentSheet(prev => ({ ...prev, location: e.target.value }))}
-                            placeholder="Indirizzo"
-                            className={`w-full p-3 border rounded-lg ${inputClass}`}
-                          />
-                        </div>
-                      </div>
 
-                      <div className="flex gap-3">
-                        <button
-                          onClick={saveSheet}
-                          className="flex-1 py-3 bg-green-600 text-white rounded-lg font-semibold"
-                        >
-                          💾 Salva
-                        </button>
-                        <button
-                          onClick={generateShareLink}
-                          className="flex-1 py-3 bg-purple-600 text-white rounded-lg font-semibold"
-                        >
-                          📤 Genera Link WhatsApp
-                        </button>
-                      </div>
-
-                      <div>
-                        <h3 className="text-lg font-semibold mb-3">Lavoratori Registrati ({currentSheet.lavoratori?.length || 0})</h3>
-                        {currentSheet.lavoratori && currentSheet.lavoratori.length > 0 ? (
-                          currentSheet.lavoratori.map((worker, i) => (
-                            <div key={worker.id} className={`${darkMode ? 'bg-gray-700' : 'bg-gray-50'} p-4 rounded-lg mb-3`}>
-                              {editingWorker?.id === worker.id ? (
-                                <div className="space-y-3">
-                                  <p className="font-semibold">{worker.nome} {worker.cognome}</p>
-                                  <div className="grid grid-cols-3 gap-3">
-                                    <div>
-                                      <label className="text-xs">Ora IN</label>
-                                      <input
-                                        type="time"
-                                        value={editingWorker.oraIn}
-                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, oraIn: e.target.value }))}
-                                        className={`w-full p-2 border rounded ${inputClass}`}
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-xs">Ora OUT</label>
-                                      <input
-                                        type="time"
-                                        value={editingWorker.oraOut}
-                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, oraOut: e.target.value }))}
-                                        className={`w-full p-2 border rounded ${inputClass}`}
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-xs">Pausa (min)</label>
-                                      <input
-                                        type="number"
-                                        value={editingWorker.pausaMinuti}
-                                        onChange={(e) => setEditingWorker(prev => ({ ...prev, pausaMinuti: e.target.value }))}
-                                        className={`w-full p-2 border rounded ${inputClass}`}
-                                      />
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={updateWorker}
-                                      className="px-4 py-2 bg-green-600 text-white rounded"
-                                    >
-                                      Salva
-                                    </button>
-                                    <button
-                                      onClick={() => setEditingWorker(null)}
-                                      className="px-4 py-2 bg-gray-500 text-white rounded"
-                                    >
-                                      Annulla
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="flex justify-between items-center">
-                                  <div>
-                                    <p className="font-semibold">{worker.nome} {worker.cognome}</p>
-                                    <p className={`text-sm ${textClass}`}>
-                                      {worker.oraIn} - {worker.oraOut} | Pausa: {worker.pausaMinuti || 0}min | 
-                                      <span className="font-bold text-blue-600"> {worker.oreTotali}h</span>
-                                      {worker.modificato && <span className="text-red-600 ml-2">(modificato)</span>}
-                                    </p>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => setEditingWorker(worker)}
-                                      className="px-3 py-1 bg-blue-500 text-white rounded text-sm"
-                                    >
-                                      ✏️
-                                    </button>
-                                    <button
-                                      onClick={() => deleteWorker(worker.id)}
-                                      className="px-3 py-1 bg-red-500 text-white rounded text-sm"
-                                    >
-                                      🗑️
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))
-                        ) : (
-                          <p className={`${textClass} text-center py-4`}>Nessun lavoratore ancora registrato</p>
-                        )}
-                      </div>
-
-                      <div className="border-t pt-6">
-                        <h3 className="text-lg font-semibold mb-3">✏️ Firma Responsabile</h3>
-                        {currentSheet.firmaResponsabile ? (
-                          <div>
-                            <img src={currentSheet.firmaResponsabile} className="border rounded mb-3 w-full max-w-md" alt="Firma" />
-                            <button
-                              onClick={() => setCurrentSheet(prev => ({ ...prev, firmaResponsabile: null }))}
-                              className="px-4 py-2 bg-red-500 text-white rounded"
-                            >
-                              Cancella Firma
-                            </button>
-                          </div>
-                        ) : (
-                          <div>
-                            <p className={`text-sm ${textClass} mb-2`}>Firma con il mouse o con il dito</p>
-                            <canvas
-                              ref={respCanvasRef}
-                              width={600}
-                              height={200}
-                              onMouseDown={startDrawing}
-                              onMouseMove={draw}
-                              onMouseUp={stopDrawing}
-                              onTouchStart={startDrawing}
-                              onTouchMove={draw}
-                              onTouchEnd={stopDrawing}
-                              className="border-2 border-blue-500 rounded w-full bg-white mb-3"
-                              style={{ touchAction: 'none' }}
-                            />
-                            <div className="flex gap-2">
-                              <button
-                                onClick={saveResponsabileSignature}
-                                className="px-4 py-2 bg-green-600 text-white rounded"
-                              >
-                                Salva Firma
-                              </button>
-                              <button
-                                onClick={clearSignature}
-                                className="px-4 py-2 bg-gray-500 text-white rounded"
-                              >
-                                Cancella
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex gap-3 pt-4">
-                        <button
-                          onClick={() => setCurrentSheet(null)}
-                          className="flex-1 py-3 bg-gray-500 text-white rounded-lg font-semibold"
-                        >
-                          ← Torna alla lista
-                        </button>
-                        <button
-                          onClick={completeSheet}
-                          className="flex-1 py-3 bg-red-600 text-white rounded-lg font-bold text-lg"
-                        >
-                          ✅ COMPLETA FOGLIO E GENERA PDF
-                        </button>
-                      </div>
+                    <div className="flex flex-col md:flex-row gap-3 pt-4">
+                      <button
+                        onClick={() => { setCurrentSheet(null); setCurrentView('list'); }}
+                        className="flex-1 py-3 bg-gray-500 text-white rounded-lg font-semibold"
+                      >
+                        ← Torna alla lista
+                      </button>
+                      <button
+                        onClick={completeSheet}
+                        className="flex-1 py-3 bg-red-600 text-white rounded-lg font-bold text-lg"
+                      >
+                        ✅ COMPLETA E GENERA PDF
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
             </div>
